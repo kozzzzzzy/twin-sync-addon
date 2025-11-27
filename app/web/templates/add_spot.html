@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Add Spot - TwinSync Spot{% endblock %}
+
+{% block header_actions %}
+<a href="{{ ingress_path }}/" class="btn btn-secondary">← Back</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2>📍 Add New Spot</h2>
+    </div>
+    
+    <div class="card-body">
+        <form id="add-spot-form" onsubmit="submitAddSpotForm(event)">
+            
+            <div class="form-group">
+                <label for="name-input">Spot Name</label>
+                <input type="text" id="name-input" placeholder="e.g., Kitchen, My Desk, Living Room" required>
+                <div class="hint">Give it a name you'll recognize</div>
+            </div>
+            
+            <div class="form-group">
+                <label for="camera-select">Camera</label>
+                <select id="camera-select" required>
+                    <option value="">Loading cameras...</option>
+                </select>
+                <div class="hint">Which camera can see this spot?</div>
+            </div>
+            
+            <div class="form-group">
+                <label for="spot-type-select">What kind of spot is this?</label>
+                <select id="spot-type-select">
+                    <option value="">Loading...</option>
+                </select>
+                <div class="hint">This will pre-fill a template for your definition</div>
+            </div>
+            
+            <div class="form-group">
+                <label for="definition-input">Your Definition of "Ready"</label>
+                <textarea id="definition-input" placeholder="Describe what this spot looks like when it's ready..." required></textarea>
+                <div class="hint">Be specific! What should be there? What shouldn't?</div>
+            </div>
+            
+            <div class="form-group">
+                <label>Voice</label>
+                <div class="hint" style="margin-bottom:0.75rem">How should updates sound?</div>
+                <div id="voice-options" class="voice-select">
+                    <!-- Populated by JS -->
+                </div>
+                <input type="hidden" id="voice-input" value="supportive">
+            </div>
+            
+            <div style="margin-top:2rem">
+                <button type="submit" class="btn btn-primary" style="width:100%;padding:1rem">
+                    ✨ Create Spot
+                </button>
+            </div>
+            
+        </form>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', initAddSpotForm);
+</script>
+{% endblock %}

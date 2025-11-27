@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Error - TwinSync Spot{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-body" style="text-align:center;padding:3rem">
+        <div style="font-size:4rem;margin-bottom:1rem">😕</div>
+        <h2 style="margin-bottom:0.5rem">{{ error }}</h2>
+        <p style="color:var(--text-muted);margin-bottom:1.5rem">Something went wrong.</p>
+        <a href="{{ ingress_path }}/" class="btn btn-primary">← Back to Home</a>
+    </div>
+</div>
+{% endblock %}

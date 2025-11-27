@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block title %}{{ spot.name }} - TwinSync Spot{% endblock %}
+
+{% block header_actions %}
+<a href="{{ ingress_path }}/" class="btn btn-secondary">← Back</a>
+{% endblock %}
+
+{% block content %}
+<div class="card spot-card {{ 'snoozed' if spot.is_snoozed else spot.status.value }}">
+    <div class="card-header">
+        <h2>
+            <span>📍</span>
+            {{ spot.name }}
+        </h2>
+        <span class="spot-status {{ 'snoozed' if spot.is_snoozed else spot.status.value }}">
+            {{ spot.status_emoji }} {{ spot.status_text }}
+        </span>
+    </div>
+    
+    <div class="card-body">
+        <!-- Definition -->
+        <div class="items-section">
+            <h3>Your Definition</h3>
+            <div style="background:var(--bg);padding:1rem;border-radius:var(--radius-sm);white-space:pre-wrap;font-family:inherit">{{ spot.definition }}</div>
+        </div>
+        
+        {% if checks %}
+        <!-- Latest Check Results -->
+        {% set latest = checks[0] %}
+        
+        {% if latest.to_sort %}
+        <div class="items-section">
+            <h3>To sort</h3>
+            <ul class="items-list to-sort-list">
+                {% for item in latest.to_sort %}
+                <li>
+                    <span class="item-bullet">•</span>
+                    <span class="item-text">
+                        <strong>{{ item.item }}</strong>
+                        {% if item.location %}<span class="item-location">({{ item.location }})</span>{% endif %}
+                        {% if item.recurring %}<span class="recurring-badge">🔄 {{ item.recurring_count }}x</span>{% endif %}
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        
+        {% if latest.looking_good %}
+        <div class="items-section">
+            <h3>Looking good</h3>
+            <ul class="items-list looking-good-list">
+                {% for item in latest.looking_good %}
+                <li>
+                    <span class="item-bullet">✓</span>
+                    <span class="item-text">{{ item }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        
+        {% if latest.notes_main %}
+        <div class="notes-section">
+            <span>{{ latest.notes_main }}</span>
+            {% if latest.notes_pattern %}
+            <div class="pattern">📊 {{ latest.notes_pattern }}</div>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        {% else %}
+        <div style="text-align:center;padding:1.5rem;color:var(--text-muted)">
+            <p>Not checked yet. Click "Check" to scan this spot.</p>
+        </div>
+        {% endif %}
+    </div>
+    
+    <div class="spot-actions">
+        <button class="btn btn-primary" onclick="checkSpot({{ spot.id }}, this)">
+            📷 Check
+        </button>
+        <button class="btn btn-success" onclick="resetSpot({{ spot.id }}, this)" {{ 'disabled' if spot.status.value == 'sorted' else '' }}>
+            ✓ Reset
+        </button>
+        {% if spot.is_snoozed %}
+        <button class="btn btn-secondary" onclick="unsnoozeSpot({{ spot.id }}, this)">
+            ⏰ Unsnooze
+        </button>
+        {% else %}
+        <button class="btn btn-secondary" onclick="snoozeSpot({{ spot.id }}, 60, this)">
+            💤 1 hour
+        </button>
+        <button class="btn btn-secondary" onclick="snoozeSpot({{ spot.id }}, 1440, this)">
+            💤 Tomorrow
+        </button>
+        {% endif %}
+    </div>
+    
+    <div class="streak-info">
+        <span class="streak-fire">🔥</span>
+        <span>Streak: <strong>{{ memory.current_streak }}</strong> day{{ 's' if memory.current_streak != 1 else '' }}</span>
+        {% if memory.longest_streak > memory.current_streak %}
+        <span class="best">(best: {{ memory.longest_streak }})</span>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Memory & Patterns -->
+<div class="card">
+    <div class="card-header">
+        <h2>🧠 Memory & Patterns</h2>
+    </div>
+    <div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem">
+            
+            <div style="padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">
+                <div style="font-size:0.875rem;color:var(--text-muted);margin-bottom:0.25rem">Total Checks</div>
+                <div style="font-size:1.5rem;font-weight:600">{{ memory.total_checks }}</div>
+            </div>
+            
+            {% if memory.worst_day %}
+            <div style="padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">
+                <div style="font-size:0.875rem;color:var(--text-muted);margin-bottom:0.25rem">Toughest Day</div>
+                <div style="font-size:1.5rem;font-weight:600">{{ memory.worst_day }}</div>
+            </div>
+            {% endif %}
+            
+            {% if memory.best_day %}
+            <div style="padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">
+                <div style="font-size:0.875rem;color:var(--text-muted);margin-bottom:0.25rem">Best Day</div>
+                <div style="font-size:1.5rem;font-weight:600">{{ memory.best_day }}</div>
+            </div>
+            {% endif %}
+            
+            {% if memory.usually_sorted_by %}
+            <div style="padding:1rem;background:var(--bg);border-radius:var(--radius-sm)">
+                <div style="font-size:0.875rem;color:var(--text-muted);margin-bottom:0.25rem">Usually Sorted By</div>
+                <div style="font-size:1.5rem;font-weight:600">{{ memory.usually_sorted_by }}</div>
+            </div>
+            {% endif %}
+            
+        </div>
+        
+        {% if memory.recurring_items %}
+        <div style="margin-top:1.5rem">
+            <h3 style="font-size:0.875rem;color:var(--text-muted);margin-bottom:0.75rem">RECURRING ITEMS</h3>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
+                {% for item, count in memory.recurring_items %}
+                <span style="background:var(--warning-bg);color:#e65100;padding:0.35rem 0.75rem;border-radius:999px;font-size:0.875rem">
+                    {{ item }} <strong>({{ count }}x)</strong>
+                </span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Recent Checks -->
+{% if checks %}
+<div class="card">
+    <div class="card-header">
+        <h2>📋 Recent Checks</h2>
+    </div>
+    <div class="card-body" style="padding:0">
+        <table style="width:100%;border-collapse:collapse">
+            <thead>
+                <tr style="background:var(--bg)">
+                    <th style="padding:0.75rem 1rem;text-align:left;font-weight:500">Time</th>
+                    <th style="padding:0.75rem 1rem;text-align:left;font-weight:500">Status</th>
+                    <th style="padding:0.75rem 1rem;text-align:right;font-weight:500">To Sort</th>
+                    <th style="padding:0.75rem 1rem;text-align:right;font-weight:500">Looking Good</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for check in checks %}
+                <tr style="border-top:1px solid var(--border)">
+                    <td style="padding:0.75rem 1rem">{{ check.timestamp.strftime('%b %d, %H:%M') }}</td>
+                    <td style="padding:0.75rem 1rem">
+                        <span class="spot-status {{ check.status.value }}" style="font-size:0.75rem">
+                            {{ '✅' if check.status.value == 'sorted' else '⚠️' }} {{ check.status.value|replace('_', ' ')|title }}
+                        </span>
+                    </td>
+                    <td style="padding:0.75rem 1rem;text-align:right">{{ check.to_sort_count }}</td>
+                    <td style="padding:0.75rem 1rem;text-align:right">{{ check.looking_good_count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Danger Zone -->
+<div class="card" style="border:1px solid var(--danger)">
+    <div class="card-header">
+        <h2 style="color:var(--danger)">⚠️ Danger Zone</h2>
+    </div>
+    <div class="card-body">
+        <p style="margin-bottom:1rem;color:var(--text-muted)">Permanently delete this spot and all its history.</p>
+        <button class="btn" style="background:var(--danger);color:white" onclick="deleteSpot({{ spot.id }})">
+            🗑️ Delete Spot
+        </button>
+    </div>
+</div>
+{% endblock %}

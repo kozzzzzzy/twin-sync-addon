@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}TwinSync Spot{% endblock %}
+
+{% block header_actions %}
+<button class="btn btn-secondary" onclick="checkAllSpots(this)">
+    <span>🔄 Check All</span>
+</button>
+<a href="{{ ingress_path }}/add" class="btn btn-primary">
+    <span>+ Add Spot</span>
+</a>
+{% endblock %}
+
+{% block content %}
+<div id="spots-container">
+    <!-- Loading state -->
+    <div id="loading" class="loading">
+        <div class="spinner"></div>
+        <span>Loading spots...</span>
+    </div>
+    
+    <!-- Empty state (hidden by default) -->
+    <div id="empty-state" class="empty-state card" style="display:none">
+        <div class="emoji">👋</div>
+        <h2>Welcome to TwinSync Spot!</h2>
+        <p>No spots configured yet. Add your first spot to get started.</p>
+        <a href="{{ ingress_path }}/add" class="btn btn-primary">+ Add Your First Spot</a>
+    </div>
+    
+    <!-- Spots will be rendered here -->
+    <div id="spots-list"></div>
+</div>
+
+<script>
+async function loadSpots() {
+    const loading = document.getElementById('loading');
+    const emptyState = document.getElementById('empty-state');
+    const spotsList = document.getElementById('spots-list');
+    
+    try {
+        const data = await api('/spots');
+        loading.style.display = 'none';
+        
+        if (data.spots.length === 0) {
+            emptyState.style.display = 'block';
+            return;
+        }
+        
+        spotsList.innerHTML = data.spots.map(spot => renderSpotCard(spot)).join('');
+        
+    } catch (error) {
+        loading.innerHTML = `<span style="color:var(--danger)">Error: ${error.message}</span>`;
+    }
+}
+
+function renderSpotCard(spot) {
+    const statusClass = spot.is_snoozed ? 'snoozed' : spot.status;
+    
+    // To sort items
+    let toSortHtml = '';
+    if (spot.to_sort && spot.to_sort.length > 0) {
+        toSortHtml = `
+            <div class="items-section">
+                <h3>To sort</h3>
+                <ul class="items-list to-sort-list">
+                    ${spot.to_sort.map(item => `
+                        <li>
+                            <span class="item-bullet">•</span>
+                            <span class="item-text">
+                                <strong>${escapeHtml(item.item)}</strong>
+                                ${item.location ? `<span class="item-location">(${escapeHtml(item.location)})</span>` : ''}
+                                ${item.recurring ? `<span class="recurring-badge">🔄 ${item.recurring_count}x</span>` : ''}
+                            </span>
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        `;
+    }
+    
+    // Looking good items
+    let lookingGoodHtml = '';
+    if (spot.looking_good && spot.looking_good.length > 0) {
+        lookingGoodHtml = `
+            <div class="items-section">
+                <h3>Looking good</h3>
+                <ul class="items-list looking-good-list">
+                    ${spot.looking_good.map(item => `
+                        <li>
+                            <span class="item-bullet">✓</span>
+                            <span class="item-text">${escapeHtml(item)}</span>
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        `;
+    }
+    
+    // Notes
+    let notesHtml = '';
+    if (spot.notes && spot.notes.main) {
+        notesHtml = `
+            <div class="notes-section">
+                <span>${escapeHtml(spot.notes.main)}</span>
+                ${spot.notes.pattern ? `<div class="pattern">📊 ${escapeHtml(spot.notes.pattern)}</div>` : ''}
+            </div>
+        `;
+    }
+    
+    // Empty state for unknown status
+    let contentHtml = toSortHtml + lookingGoodHtml + notesHtml;
+    if (!contentHtml && spot.status === 'unknown') {
+        contentHtml = `
+            <div style="text-align:center;padding:1rem;color:var(--text-muted)">
+                <p>Not checked yet. Click "Check" to scan this spot.</p>
+            </div>
+        `;
+    }
+    
+    return `
+        <div class="card spot-card ${statusClass}">
+            <div class="card-header">
+                <h2>
+                    <span>📍</span>
+                    <a href="${window.INGRESS_PATH}/spot/${spot.id}" style="text-decoration:none;color:inherit">
+                        ${escapeHtml(spot.name)}
+                    </a>
+                </h2>
+                <span class="spot-status ${statusClass}">
+                    ${spot.status_emoji} ${spot.status_text}
+                </span>
+            </div>
+            
+            <div class="card-body">
+                ${contentHtml}
+            </div>
+            
+            <div class="spot-actions">
+                <button class="btn btn-primary" onclick="checkSpot(${spot.id}, this)">
+                    📷 Check
+                </button>
+                <button class="btn btn-success" onclick="resetSpot(${spot.id}, this)" ${spot.status === 'sorted' ? 'disabled' : ''}>
+                    ✓ Reset
+                </button>
+                ${spot.is_snoozed ? `
+                    <button class="btn btn-secondary" onclick="unsnoozeSpot(${spot.id}, this)">
+                        ⏰ Unsnooze
+                    </button>
+                ` : `
+                    <button class="btn btn-secondary" onclick="snoozeSpot(${spot.id}, 1440, this)">
+                        💤 Later
+                    </button>
+                `}
+            </div>
+            
+            <div class="streak-info">
+                <span class="streak-fire">🔥</span>
+                <span>Streak: <strong>${spot.current_streak}</strong> day${spot.current_streak !== 1 ? 's' : ''}</span>
+                ${spot.longest_streak > spot.current_streak ? `
+                    <span class="best">(best: ${spot.longest_streak})</span>
+                ` : ''}
+            </div>
+        </div>
+    `;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Load spots on page load
+loadSpots();
+</script>
+{% endblock %}

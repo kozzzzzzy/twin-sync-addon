@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - TwinSync Spot{% endblock %}
+
+{% block header_actions %}
+<a href="{{ ingress_path }}/" class="btn btn-secondary">← Back</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2>⚙️ Settings</h2>
+    </div>
+    <div class="card-body">
+        <div class="form-group">
+            <label>Gemini API Key</label>
+            <div style="display:flex;align-items:center;gap:0.5rem">
+                {% if settings.gemini_api_key %}
+                <span style="color:var(--success)">✅ Configured</span>
+                {% else %}
+                <span style="color:var(--danger)">❌ Not configured</span>
+                {% endif %}
+            </div>
+            <div class="hint" style="margin-top:0.5rem">
+                {% if settings.is_ha_addon %}
+                Configure in Add-on settings: Settings → Add-ons → TwinSync Spot → Configuration
+                {% else %}
+                Set the GEMINI_API_KEY environment variable
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label>Mode</label>
+            <div>{{ 'Home Assistant Add-on' if settings.is_ha_addon else 'Standalone' }}</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>📖 About</h2>
+    </div>
+    <div class="card-body">
+        <p><strong>TwinSync Spot</strong> v1.0.0</p>
+        <p style="color:var(--text-muted);margin-top:0.5rem">
+            Does this match YOUR definition?
+        </p>
+        <p style="margin-top:1rem">
+            <a href="https://github.com/kozzzzzzy/twin-sync-spot" target="_blank">GitHub Repository</a>
+        </p>
+    </div>
+</div>
+{% endblock %}
