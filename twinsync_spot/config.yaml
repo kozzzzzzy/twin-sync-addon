@@ -3,7 +3,6 @@ description: "Does this match YOUR definition? Compare camera snapshots to YOUR 
 version: "1.0.0"
 slug: "twinsync_spot"
 url: "https://github.com/kozzzzzzy/twin-sync-addon"
-image: ghcr.io/kozzzzzzy/twinsync-spot-{arch}
 build_from:
   aarch64: ghcr.io/home-assistant/aarch64-base-python:3.11-alpine3.18
   amd64: ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
