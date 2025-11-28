@@ -1,4 +1,4 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
+ARG BUILD_FROM=python:3.11-alpine
 FROM ${BUILD_FROM}
 
 # Install dependencies
@@ -31,5 +31,5 @@ RUN mkdir -p /data
 # Expose port
 EXPOSE 8099
 
-# Run
-CMD ["/run.sh"]
+# Set entrypoint directly (no s6)
+ENTRYPOINT ["/run.sh"]
