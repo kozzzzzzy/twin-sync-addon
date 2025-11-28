@@ -1,10 +1,15 @@
-#!/usr/bin/with-contenv bashio
-# shellcheck shell=bash
+#!/bin/bash
+set -e
 
-# Get config from HA Add-on options
-export GEMINI_API_KEY=$(bashio::config 'gemini_api_key')
+# Read config from /data/options.json (HA add-on config)
+if [ -f /data/options.json ]; then
+    GEMINI_API_KEY=$(jq -r '.gemini_api_key // empty' /data/options.json)
+    if [ -n "$GEMINI_API_KEY" ]; then
+        export GEMINI_API_KEY
+    fi
+fi
 
-# Get HA supervisor token for API access
+# Get HA supervisor token for API access  
 export SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}"
 export HA_BASE_URL="http://supervisor/core"
 
@@ -19,6 +24,7 @@ echo "  TwinSync Spot - Starting..."
 echo "========================================"
 echo "  Data dir: ${DATA_DIR}"
 echo "  Ingress path: ${INGRESS_PATH:-'(none)'}"
+echo "  Gemini API: $([ -n "${GEMINI_API_KEY:-}" ] && echo 'configured' || echo 'not configured')"
 echo "========================================"
 
 # Run the FastAPI app

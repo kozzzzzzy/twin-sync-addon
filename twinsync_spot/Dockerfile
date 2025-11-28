@@ -7,7 +7,9 @@ RUN apk add --no-cache \
     musl-dev \
     libffi-dev \
     openssl-dev \
-    ffmpeg
+    ffmpeg \
+    jq \
+    bash
 
 # Set working directory
 WORKDIR /app
