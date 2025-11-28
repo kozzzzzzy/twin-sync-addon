@@ -47,7 +47,7 @@ Looking good:
 
 1. Add this repository to your HA Add-on store:
    ```
-   https://github.com/kozzzzzzy/twin-sync-spot
+   https://github.com/kozzzzzzy/twin-sync-addon
    ```
 
 2. Install "TwinSync Spot"
