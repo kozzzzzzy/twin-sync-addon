@@ -1,10 +1,12 @@
 """Home Assistant camera adapter."""
 
 import os
+import json
 import logging
+import asyncio
 from typing import Optional, List
-
-import aiohttp
+import urllib.request
+import urllib.error
 
 from app.core.models import Camera
 
@@ -40,57 +42,60 @@ class HACamera:
 
         return token
 
-    async def get_cameras(self) -> List[Camera]:
-        """Get list of camera entities from Home Assistant.
+    # -------------------- blocking helpers (run in a thread) --------------------
 
-        Returns a list of Camera models. If anything fails (no token, bad
-        response, exception), it returns an empty list and logs the reason.
-        """
+    def _fetch_states_sync(self, token: str) -> list[dict]:
+        """Blocking HTTP call to /api/states using standard library."""
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Hassio-Key": token,
+        }
+        url = f"{self.ha_base_url}/api/states"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.load(resp)
+
+    def _fetch_snapshot_sync(self, token: str, entity_id: str) -> Optional[bytes]:
+        """Blocking HTTP call to /api/camera_proxy/<entity_id>."""
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Hassio-Key": token,
+        }
+        url = f"{self.ha_base_url}/api/camera_proxy/{entity_id}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()
+
+    # -------------------------- async public API -------------------------------
+
+    async def get_cameras(self) -> List[Camera]:
+        """Get list of camera entities from Home Assistant."""
         token = self._get_token()
         if not token:
             return []
 
-        headers = {
-            "Authorization": f"Bearer {token}",
-            # Some Supervisor setups also honour this legacy header
-            "X-Hassio-Key": token,
-        }
-
-        cameras: List[Camera] = []
-
         try:
-            async with aiohttp.ClientSession() as session:
-                states_url = f"{self.ha_base_url}/api/states"
-                async with session.get(states_url, headers=headers) as response:
-                    if response.status != 200:
-                        detail = (await response.text())[:200]
-                        LOGGER.warning(
-                            "Failed to fetch states from Home Assistant: %s %s",
-                            response.status,
-                            detail,
-                        )
-                        return []
-
-                    states = await response.json()
-
-            # Extract all camera.* entities
-            for state in states:
-                entity_id = state.get("entity_id", "")
-                if entity_id.startswith("camera."):
-                    cameras.append(
-                        Camera(
-                            entity_id=entity_id,
-                            name=state.get("attributes", {}).get(
-                                "friendly_name", entity_id
-                            ),
-                            state=state.get("state", "unknown"),
-                        )
-                    )
-
+            # Run the blocking HTTP in a thread so we don't freeze the event loop
+            states = await asyncio.to_thread(self._fetch_states_sync, token)
         except Exception as exc:  # noqa: BLE001
-            LOGGER.exception("Error fetching cameras: %s", exc)
+            LOGGER.exception("Error fetching cameras from Home Assistant: %s", exc)
             return []
 
+        cameras: List[Camera] = []
+        for state in states:
+            entity_id = state.get("entity_id", "")
+            if entity_id.startswith("camera."):
+                cameras.append(
+                    Camera(
+                        entity_id=entity_id,
+                        name=state.get("attributes", {}).get(
+                            "friendly_name", entity_id
+                        ),
+                        state=state.get("state", "unknown"),
+                    )
+                )
+
+        LOGGER.info("Discovered %d cameras from Home Assistant", len(cameras))
         return cameras
 
     async def get_snapshot(self, entity_id: str) -> Optional[bytes]:
@@ -99,33 +104,14 @@ class HACamera:
         if not token:
             return None
 
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "X-Hassio-Key": token,
-        }
-
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.ha_base_url}/api/camera_proxy/{entity_id}"
-                async with session.get(url, headers=headers, timeout=30) as response:
-                    if response.status != 200:
-                        detail = (await response.text())[:200]
-                        LOGGER.warning(
-                            "Failed to get snapshot for %s: %s %s",
-                            entity_id,
-                            response.status,
-                            detail,
-                        )
-                        return None
-
-                    return await response.read()
-
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.exception(
-                "Error getting snapshot for %s: %s",
+            return await asyncio.to_thread(
+                self._fetch_snapshot_sync,
+                token,
                 entity_id,
-                exc,
             )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("Error getting snapshot for %s: %s", entity_id, exc)
             return None
 
     async def test_camera(self, entity_id: str) -> bool:
