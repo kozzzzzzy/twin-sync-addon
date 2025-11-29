@@ -1,28 +1,49 @@
 """API routes for TwinSync Spot."""
-
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from app.config import settings
-from app.db.sqlite import Database
-from app.core.models import SPOT_TYPES, SpotStatus
-from app.core.voices import VOICES
-from app.core.analyzer import SpotAnalyzer, AnalyzerError, validate_api_key
-from app.core.memory import enrich_items_with_recurring, MemoryEngine
+from app.core.models import SPOT_TEMPLATES, SpotStatus
+from app.core.voices import get_all_voices
+from app.core.analyzer import SpotAnalyzer
 from app.camera.ha_adapter import HACamera
-from app.camera.rtsp_adapter import RTSPCamera
 
 
 router = APIRouter()
 
 
-# =============================================================================
-# REQUEST/RESPONSE MODELS
-# =============================================================================
+def _extract_ha_token(request: Request) -> Optional[str]:
+    """Extract Home Assistant access token from request.
+    
+    Checks in order:
+    1. Authorization: Bearer <token> header
+    2. X-Hassio-Key header  
+    3. x-hassio-key header (lowercase)
+    4. Environment variables (fallback)
+    
+    HA's ingress proxy adds these headers when proxying requests.
+    """
+    # Check Authorization header
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1].strip()
+        if token:
+            return token
 
+    # Check X-Hassio-Key header (various cases)
+    for header_name in ("X-Hassio-Key", "x-hassio-key", "X-HASSIO-KEY"):
+        token = request.headers.get(header_name)
+        if token:
+            return token
+
+    # Fallback to environment
+    return os.environ.get("SUPERVISOR_TOKEN") or os.environ.get("HASSIO_TOKEN")
+
+
+# Request/Response models
 class CreateSpotRequest(BaseModel):
     name: str
     camera_entity: str
@@ -42,67 +63,42 @@ class UpdateSpotRequest(BaseModel):
 
 
 class SnoozeRequest(BaseModel):
-    minutes: int = 60
+    minutes: int = 30
 
 
-class SettingsRequest(BaseModel):
-    gemini_api_key: Optional[str] = None
-
-
-# =============================================================================
-# SPOTS ENDPOINTS
-# =============================================================================
-
+# Spots
 @router.get("/spots")
 async def list_spots(request: Request):
     """List all spots."""
-    db: Database = request.app.state.db
+    db = request.app.state.db
     spots = await db.get_all_spots()
     
-    result = []
-    for spot in spots:
-        memory = await db.get_spot_memory(spot.id)
-        recent_check = (await db.get_recent_checks(spot.id, limit=1))
-        latest = recent_check[0] if recent_check else None
-        
-        result.append({
-            "id": spot.id,
-            "name": spot.name,
-            "status": spot.status.value,
-            "status_emoji": spot.status_emoji,
-            "status_text": spot.status_text,
-            "is_snoozed": spot.is_snoozed,
-            "last_check": spot.last_check.isoformat() if spot.last_check else None,
-            "current_streak": memory.current_streak,
-            "longest_streak": memory.longest_streak,
-            "to_sort_count": latest.to_sort_count if latest else 0,
-            "looking_good_count": latest.looking_good_count if latest else 0,
-            "to_sort": [
-                {
-                    "item": item.item,
-                    "location": item.location,
-                    "recurring": item.recurring,
-                    "recurring_count": item.recurring_count,
-                }
-                for item in (latest.to_sort if latest else [])
-            ],
-            "looking_good": latest.looking_good if latest else [],
-            "notes": {
-                "main": latest.notes_main if latest else None,
-                "pattern": latest.notes_pattern if latest else None,
-                "encouragement": latest.notes_encouragement if latest else None,
-            },
-        })
-    
-    return {"spots": result}
+    return {
+        "spots": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "camera_entity": s.camera_entity,
+                "definition": s.definition,
+                "spot_type": s.spot_type,
+                "voice": s.voice,
+                "status": s.status.value if isinstance(s.status, SpotStatus) else s.status,
+                "last_check": s.last_check,
+                "current_streak": s.current_streak,
+                "longest_streak": s.longest_streak,
+                "snoozed_until": s.snoozed_until,
+            }
+            for s in spots
+        ]
+    }
 
 
 @router.post("/spots")
 async def create_spot(request: Request, data: CreateSpotRequest):
     """Create a new spot."""
-    db: Database = request.app.state.db
+    db = request.app.state.db
     
-    spot = await db.create_spot(
+    spot_id = await db.create_spot(
         name=data.name,
         camera_entity=data.camera_entity,
         definition=data.definition,
@@ -111,17 +107,17 @@ async def create_spot(request: Request, data: CreateSpotRequest):
         custom_voice_prompt=data.custom_voice_prompt,
     )
     
-    return {"spot": {"id": spot.id, "name": spot.name}}
+    return {"id": spot_id, "message": "Spot created"}
 
 
 @router.get("/spots/{spot_id}")
 async def get_spot(request: Request, spot_id: int):
-    """Get a spot by ID."""
-    db: Database = request.app.state.db
-    spot = await db.get_spot(spot_id)
+    """Get a spot with its memory."""
+    db = request.app.state.db
     
+    spot = await db.get_spot(spot_id)
     if not spot:
-        raise HTTPException(404, "Spot not found")
+        raise HTTPException(status_code=404, detail="Spot not found")
     
     memory = await db.get_spot_memory(spot_id)
     recent_checks = await db.get_recent_checks(spot_id, limit=10)
@@ -132,284 +128,262 @@ async def get_spot(request: Request, spot_id: int):
             "name": spot.name,
             "camera_entity": spot.camera_entity,
             "definition": spot.definition,
-            "spot_type": spot.spot_type.value,
+            "spot_type": spot.spot_type,
             "voice": spot.voice,
-            "status": spot.status.value,
-            "status_emoji": spot.status_emoji,
-            "status_text": spot.status_text,
-            "is_snoozed": spot.is_snoozed,
-            "snoozed_until": spot.snoozed_until.isoformat() if spot.snoozed_until else None,
-            "created_at": spot.created_at.isoformat(),
-            "last_check": spot.last_check.isoformat() if spot.last_check else None,
+            "custom_voice_prompt": spot.custom_voice_prompt,
+            "status": spot.status.value if isinstance(spot.status, SpotStatus) else spot.status,
+            "last_check": spot.last_check,
+            "current_streak": spot.current_streak,
+            "longest_streak": spot.longest_streak,
+            "snoozed_until": spot.snoozed_until,
+            "total_resets": spot.total_resets,
         },
         "memory": {
-            "current_streak": memory.current_streak,
-            "longest_streak": memory.longest_streak,
             "total_checks": memory.total_checks,
-            "recurring_items": memory.top_recurring,
-            "worst_day": memory.worst_day,
-            "best_day": memory.best_day,
-            "usually_sorted_by": memory.usually_sorted_by,
-        },
-        "recent_checks": [
-            {
-                "id": check.id,
-                "timestamp": check.timestamp.isoformat(),
-                "status": check.status.value,
-                "to_sort_count": check.to_sort_count,
-                "looking_good_count": check.looking_good_count,
+            "patterns": {
+                "recurring_items": memory.patterns.recurring_items,
+                "worst_day": memory.patterns.worst_day,
+                "best_day": memory.patterns.best_day,
+                "usually_sorted_by": memory.patterns.usually_sorted_by,
             }
-            for check in recent_checks
-        ]
+        },
+        "recent_checks": recent_checks,
     }
 
 
 @router.put("/spots/{spot_id}")
 async def update_spot(request: Request, spot_id: int, data: UpdateSpotRequest):
     """Update a spot."""
-    db: Database = request.app.state.db
+    db = request.app.state.db
     
-    updates = data.model_dump(exclude_none=True)
+    updates = {k: v for k, v in data.model_dump().items() if v is not None}
     if not updates:
-        raise HTTPException(400, "No updates provided")
+        raise HTTPException(status_code=400, detail="No updates provided")
     
-    spot = await db.update_spot(spot_id, **updates)
-    if not spot:
-        raise HTTPException(404, "Spot not found")
+    success = await db.update_spot(spot_id, **updates)
+    if not success:
+        raise HTTPException(status_code=404, detail="Spot not found")
     
-    return {"spot": {"id": spot.id, "name": spot.name}}
+    return {"message": "Spot updated"}
 
 
 @router.delete("/spots/{spot_id}")
 async def delete_spot(request: Request, spot_id: int):
     """Delete a spot."""
-    db: Database = request.app.state.db
+    db = request.app.state.db
     
-    deleted = await db.delete_spot(spot_id)
-    if not deleted:
-        raise HTTPException(404, "Spot not found")
+    success = await db.delete_spot(spot_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Spot not found")
     
-    return {"deleted": True}
+    return {"message": "Spot deleted"}
 
-
-# =============================================================================
-# ACTIONS
-# =============================================================================
 
 @router.post("/spots/{spot_id}/check")
 async def check_spot(request: Request, spot_id: int):
     """Run a check on a spot."""
-    db: Database = request.app.state.db
+    db = request.app.state.db
+    
     spot = await db.get_spot(spot_id)
-    
     if not spot:
-        raise HTTPException(404, "Spot not found")
+        raise HTTPException(status_code=404, detail="Spot not found")
     
-    # Update status to checking
-    await db.update_spot(spot_id, status="checking")
+    # Extract token from request headers
+    token = _extract_ha_token(request)
     
     # Get camera snapshot
-    if settings.is_ha_addon:
-        ha_camera = HACamera()
-        image_bytes = await ha_camera.get_snapshot(spot.camera_entity)
-    else:
-        # TODO: Support custom cameras in standalone mode
-        raise HTTPException(501, "Standalone camera support coming soon")
+    camera = HACamera()
+    image_bytes = await camera.get_snapshot(spot.camera_entity, token)
     
     if not image_bytes:
-        await db.save_check(
-            spot_id=spot_id,
-            status="error",
-            to_sort=[],
-            looking_good=[],
-            error_message="Failed to get camera snapshot",
-        )
-        raise HTTPException(500, "Failed to get camera snapshot")
+        raise HTTPException(status_code=500, detail="Failed to get camera snapshot")
     
     # Get memory for context
     memory = await db.get_spot_memory(spot_id)
     
     # Analyze with Gemini
     analyzer = SpotAnalyzer()
-    try:
-        result = await analyzer.analyze(
-            image_bytes=image_bytes,
-            spot_name=spot.name,
-            definition=spot.definition,
-            voice=spot.voice,
-            memory=memory,
-        )
-    except AnalyzerError as e:
-        await db.save_check(
-            spot_id=spot_id,
-            status="error",
-            to_sort=[],
-            looking_good=[],
-            error_message=str(e),
-        )
-        raise HTTPException(500, str(e))
-    
-    # Enrich to_sort with recurring info from memory
-    to_sort_items = [
-        {"item": item["item"], "location": item.get("location")}
-        for item in result["to_sort"]
-    ]
-    
-    # Add recurring flags
-    for item in to_sort_items:
-        normalized = item["item"].lower().strip()
-        if normalized in memory.recurring_items:
-            item["recurring"] = True
-            item["recurring_count"] = memory.recurring_items[normalized]
-        else:
-            item["recurring"] = False
-            item["recurring_count"] = 0
-    
-    # Save check result
-    check = await db.save_check(
-        spot_id=spot_id,
-        status=result["status"],
-        to_sort=to_sort_items,
-        looking_good=result["looking_good"],
-        notes_main=result["notes"]["main"],
-        notes_pattern=result["notes"]["pattern"],
-        notes_encouragement=result["notes"]["encouragement"],
-        api_response_time=result.get("api_response_time", 0),
+    result = await analyzer.analyze(
+        image_bytes=image_bytes,
+        spot_name=spot.name,
+        definition=spot.definition,
+        voice=spot.voice,
+        custom_voice_prompt=spot.custom_voice_prompt,
+        memory=memory,
     )
     
-    # Update streak if needed
-    if result["status"] == "needs_attention":
+    # Save check result
+    check_id = await db.save_check(spot_id, result)
+    
+    # If needs_attention, reset streak
+    if result.status == "needs_attention":
         await db.update_spot(spot_id, current_streak=0)
     
     return {
-        "check_id": check.id,
-        "status": result["status"],
-        "to_sort": to_sort_items,
-        "looking_good": result["looking_good"],
-        "notes": result["notes"],
+        "check_id": check_id,
+        "status": result.status,
+        "to_sort": result.to_sort,
+        "looking_good": result.looking_good,
+        "notes": result.notes,
+        "error_message": result.error_message,
+        "api_response_time": result.api_response_time,
     }
 
 
 @router.post("/spots/{spot_id}/reset")
 async def reset_spot(request: Request, spot_id: int):
-    """Mark spot as fixed/sorted."""
-    db: Database = request.app.state.db
+    """Mark a spot as fixed (reset)."""
+    db = request.app.state.db
     
-    spot = await db.record_reset(spot_id)
+    spot = await db.get_spot(spot_id)
+    if not spot:
+        raise HTTPException(status_code=404, detail="Spot not found")
     
-    return {
-        "status": "sorted",
-        "current_streak": spot.current_streak,
-        "longest_streak": spot.longest_streak,
-    }
+    await db.record_reset(spot_id)
+    
+    return {"message": "Spot reset", "new_streak": spot.current_streak + 1}
 
 
 @router.post("/spots/{spot_id}/snooze")
 async def snooze_spot(request: Request, spot_id: int, data: SnoozeRequest):
-    """Snooze a spot."""
-    db: Database = request.app.state.db
+    """Snooze a spot for N minutes."""
+    db = request.app.state.db
     
-    until = datetime.now() + timedelta(minutes=data.minutes)
-    spot = await db.update_spot(spot_id, snoozed_until=until)
-    
+    spot = await db.get_spot(spot_id)
     if not spot:
-        raise HTTPException(404, "Spot not found")
+        raise HTTPException(status_code=404, detail="Spot not found")
     
-    return {"snoozed_until": until.isoformat()}
+    snoozed_until = (datetime.utcnow() + timedelta(minutes=data.minutes)).isoformat()
+    await db.update_spot(spot_id, snoozed_until=snoozed_until, status="snoozed")
+    
+    return {"message": f"Snoozed for {data.minutes} minutes", "until": snoozed_until}
 
 
 @router.post("/spots/{spot_id}/unsnooze")
 async def unsnooze_spot(request: Request, spot_id: int):
-    """Unsnooze a spot."""
-    db: Database = request.app.state.db
+    """Cancel snooze on a spot."""
+    db = request.app.state.db
     
-    spot = await db.update_spot(spot_id, snoozed_until=None)
+    spot = await db.get_spot(spot_id)
     if not spot:
-        raise HTTPException(404, "Spot not found")
+        raise HTTPException(status_code=404, detail="Spot not found")
     
-    return {"snoozed": False}
+    await db.update_spot(spot_id, snoozed_until=None, status="unknown")
+    
+    return {"message": "Snooze cancelled"}
 
 
 @router.post("/check-all")
 async def check_all_spots(request: Request):
     """Check all spots."""
-    db: Database = request.app.state.db
+    db = request.app.state.db
     spots = await db.get_all_spots()
     
+    # Extract token from request headers
+    token = _extract_ha_token(request)
+    
     results = []
+    camera = HACamera()
+    analyzer = SpotAnalyzer()
+    
     for spot in spots:
-        if not spot.is_snoozed:
+        # Skip snoozed spots
+        if spot.snoozed_until:
             try:
-                # This is simplified - in production, do these in parallel
-                result = await check_spot(request, spot.id)
-                results.append({"spot_id": spot.id, "status": result["status"]})
-            except Exception as e:
-                results.append({"spot_id": spot.id, "error": str(e)})
+                snoozed_until = datetime.fromisoformat(spot.snoozed_until)
+                if snoozed_until > datetime.utcnow():
+                    results.append({"spot_id": spot.id, "status": "snoozed"})
+                    continue
+            except ValueError:
+                pass
+        
+        # Get snapshot (pass token)
+        image_bytes = await camera.get_snapshot(spot.camera_entity, token)
+        if not image_bytes:
+            results.append({"spot_id": spot.id, "status": "error", "error": "Failed to get snapshot"})
+            continue
+        
+        # Get memory
+        memory = await db.get_spot_memory(spot.id)
+        
+        # Analyze
+        result = await analyzer.analyze(
+            image_bytes=image_bytes,
+            spot_name=spot.name,
+            definition=spot.definition,
+            voice=spot.voice,
+            custom_voice_prompt=spot.custom_voice_prompt,
+            memory=memory,
+        )
+        
+        # Save
+        await db.save_check(spot.id, result)
+        
+        if result.status == "needs_attention":
+            await db.update_spot(spot.id, current_streak=0)
+        
+        results.append({
+            "spot_id": spot.id,
+            "status": result.status,
+            "to_sort_count": len(result.to_sort),
+        })
     
     return {"results": results}
 
 
-# =============================================================================
-# UTILITIES
-# =============================================================================
-
+# Cameras
 @router.get("/cameras")
 async def list_cameras(request: Request):
-    """List available cameras."""
-    if settings.is_ha_addon:
-        ha_camera = HACamera()
-        cameras = await ha_camera.get_cameras()
-        return {"cameras": [{"entity_id": c.entity_id, "name": c.name} for c in cameras]}
-    else:
-        # Return empty for standalone mode (user adds manually)
-        return {"cameras": []}
+    """List available cameras from Home Assistant."""
+    # Extract token from request headers
+    token = _extract_ha_token(request)
+    
+    camera = HACamera()
+    cameras = await camera.get_cameras(token)
+    
+    return {
+        "cameras": [
+            {"entity_id": c.entity_id, "name": c.name, "state": c.state}
+            for c in cameras
+        ]
+    }
 
 
+# Spot types and templates
 @router.get("/spot-types")
-async def list_spot_types():
-    """Get available spot types with templates."""
+async def get_spot_types():
+    """Get spot types with their templates."""
     return {
         "types": [
-            {
-                "value": spot_type.value,
-                "label": info["label"],
-                "template": info["template"],
-            }
-            for spot_type, info in SPOT_TYPES.items()
+            {"key": key, "template": template}
+            for key, template in SPOT_TEMPLATES.items()
         ]
     }
 
 
+# Voices
 @router.get("/voices")
-async def list_voices():
+async def get_voices():
     """Get available voices."""
-    return {
-        "voices": [
-            {
-                "value": key,
-                "name": voice["name"],
-                "description": voice["description"],
-                "emoji": voice["emoji"],
-            }
-            for key, voice in VOICES.items()
-        ]
-    }
+    return {"voices": get_all_voices()}
 
 
+# Settings
 @router.get("/settings")
-async def get_settings():
+async def get_settings(request: Request):
     """Get current settings."""
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    
     return {
-        "has_api_key": bool(settings.gemini_api_key),
-        "is_ha_addon": settings.is_ha_addon,
+        "has_api_key": bool(gemini_key and len(gemini_key) > 10),
+        "mode": "addon" if os.environ.get("SUPERVISOR_TOKEN") else "standalone",
     }
 
 
 @router.post("/settings/validate-key")
-async def validate_gemini_key(data: SettingsRequest):
-    """Validate a Gemini API key."""
-    if not data.gemini_api_key:
-        return {"valid": False, "error": "No key provided"}
+async def validate_api_key():
+    """Validate the Gemini API key."""
+    analyzer = SpotAnalyzer()
+    valid = await analyzer.validate_api_key()
     
-    valid = await validate_api_key(data.gemini_api_key)
     return {"valid": valid}
