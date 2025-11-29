@@ -1,36 +1,64 @@
 #!/usr/bin/with-contenv bashio
-# shellcheck shell=bash
-
-# TwinSync Spot Startup Script
-# Works with Home Assistant s6-overlay
-
 set -e
 
-# Read config from HA Add-on options
+echo "=========================================="
+echo "TwinSync Spot - Starting..."
+echo "=========================================="
+
+# Read Gemini API key from addon options
 if bashio::config.exists 'gemini_api_key'; then
-    export GEMINI_API_KEY=$(bashio::config 'gemini_api_key')
+    GEMINI_API_KEY=$(bashio::config 'gemini_api_key')
+    export GEMINI_API_KEY
+    echo "Gemini API key: configured"
+elif [ -f /data/options.json ]; then
+    GEMINI_API_KEY=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('gemini_api_key', ''))")
+    export GEMINI_API_KEY
+    echo "Gemini API key: configured (fallback)"
+else
+    echo "Warning: Gemini API key not found"
 fi
 
-# Get HA supervisor token for API access
-export SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}"
-export HA_BASE_URL="http://supervisor/core"
+# Get supervisor token - with-contenv should have it, but let's be thorough
+SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-${HASSIO_TOKEN:-}}"
 
-# Ingress path
-if bashio::var.has_value "${INGRESS_ENTRY:-}"; then
-    export INGRESS_PATH="${INGRESS_ENTRY}"
+if [ -n "$SUPERVISOR_TOKEN" ]; then
+    export SUPERVISOR_TOKEN
+    export HASSIO_TOKEN="$SUPERVISOR_TOKEN"
+    # Write to file as backup for Python process
+    echo "$SUPERVISOR_TOKEN" > /data/.supervisor_token
+    chmod 600 /data/.supervisor_token
+    echo "Supervisor token: available (length: ${#SUPERVISOR_TOKEN})"
+else
+    echo "WARNING: Supervisor token not available at startup"
+    # Try to get it from supervisor API (belt and suspenders)
+    if command -v bashio &> /dev/null; then
+        SUPERVISOR_TOKEN=$(bashio::supervisor.token 2>/dev/null || echo "")
+        if [ -n "$SUPERVISOR_TOKEN" ]; then
+            export SUPERVISOR_TOKEN
+            export HASSIO_TOKEN="$SUPERVISOR_TOKEN"
+            echo "$SUPERVISOR_TOKEN" > /data/.supervisor_token
+            chmod 600 /data/.supervisor_token
+            echo "Supervisor token: retrieved via bashio"
+        fi
+    fi
 fi
 
-# Data directory for SQLite
+# Set data directory
 export DATA_DIR="/data"
 
-bashio::log.info "========================================"
-bashio::log.info "  TwinSync Spot - Starting..."
-bashio::log.info "========================================"
-bashio::log.info "  Data dir: ${DATA_DIR}"
-bashio::log.info "  Ingress: ${INGRESS_PATH:-'(not set)'}"
-bashio::log.info "  Gemini API: $([ -n "${GEMINI_API_KEY:-}" ] && echo 'configured' || echo 'not configured')"
-bashio::log.info "========================================"
+# Get ingress path from supervisor if available
+if [ -n "$SUPERVISOR_TOKEN" ]; then
+    INGRESS_INFO=$(curl -s -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" http://supervisor/addons/self/info 2>/dev/null || echo "{}")
+    INGRESS_ENTRY=$(echo "$INGRESS_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('data', {}).get('ingress_entry', d.get('ingress_entry', '')))" 2>/dev/null || echo "")
+    if [ -n "$INGRESS_ENTRY" ]; then
+        export INGRESS_PATH="$INGRESS_ENTRY"
+        echo "Ingress path: $INGRESS_PATH"
+    fi
+fi
+
+echo "Starting FastAPI server on port 8099..."
+echo "=========================================="
 
 # Run the FastAPI app
 cd /app
-exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8099 --log-level info
+exec python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8099
