@@ -1,4 +1,4 @@
-ARG BUILD_FROM=python:3.11-alpine
+ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 # Install dependencies
@@ -8,8 +8,7 @@ RUN apk add --no-cache \
     libffi-dev \
     openssl-dev \
     ffmpeg \
-    jq \
-    bash
+    jq
 
 # Set working directory
 WORKDIR /app
@@ -20,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application
 COPY app/ ./app/
-COPY run.sh /run.sh
+COPY run.sh /
 
 # Make run script executable
 RUN chmod a+x /run.sh
@@ -31,5 +30,4 @@ RUN mkdir -p /data
 # Expose port
 EXPOSE 8099
 
-# Set entrypoint directly (no s6)
-ENTRYPOINT ["/run.sh"]
+CMD ["/run.sh"]

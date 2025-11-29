@@ -1,31 +1,35 @@
-#!/bin/bash
+#!/usr/bin/with-contenv bashio
+# shellcheck shell=bash
+
+# TwinSync Spot Startup Script
+# Works with Home Assistant s6-overlay
+
 set -e
 
-# Read config from /data/options.json (HA add-on config)
-if [ -f /data/options.json ]; then
-    GEMINI_API_KEY=$(jq -r '.gemini_api_key // empty' /data/options.json)
-    if [ -n "$GEMINI_API_KEY" ]; then
-        export GEMINI_API_KEY
-    fi
+# Read config from HA Add-on options
+if bashio::config.exists 'gemini_api_key'; then
+    export GEMINI_API_KEY=$(bashio::config 'gemini_api_key')
 fi
 
-# Get HA supervisor token for API access  
+# Get HA supervisor token for API access
 export SUPERVISOR_TOKEN="${SUPERVISOR_TOKEN:-}"
 export HA_BASE_URL="http://supervisor/core"
 
-# Set ingress path if running as add-on
-export INGRESS_PATH="${INGRESS_PATH:-}"
+# Ingress path
+if bashio::var.has_value "${INGRESS_ENTRY:-}"; then
+    export INGRESS_PATH="${INGRESS_ENTRY}"
+fi
 
 # Data directory for SQLite
 export DATA_DIR="/data"
 
-echo "========================================"
-echo "  TwinSync Spot - Starting..."
-echo "========================================"
-echo "  Data dir: ${DATA_DIR}"
-echo "  Ingress path: ${INGRESS_PATH:-'(none)'}"
-echo "  Gemini API: $([ -n "${GEMINI_API_KEY:-}" ] && echo 'configured' || echo 'not configured')"
-echo "========================================"
+bashio::log.info "========================================"
+bashio::log.info "  TwinSync Spot - Starting..."
+bashio::log.info "========================================"
+bashio::log.info "  Data dir: ${DATA_DIR}"
+bashio::log.info "  Ingress: ${INGRESS_PATH:-'(not set)'}"
+bashio::log.info "  Gemini API: $([ -n "${GEMINI_API_KEY:-}" ] && echo 'configured' || echo 'not configured')"
+bashio::log.info "========================================"
 
 # Run the FastAPI app
 cd /app
