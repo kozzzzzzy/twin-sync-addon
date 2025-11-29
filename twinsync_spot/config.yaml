@@ -1,14 +1,8 @@
 name: "TwinSync Spot"
 description: "Does this match YOUR definition? Compare camera snapshots to YOUR description of how a space should look."
-version: "1.0.0"
+version: "1.0.4"
 slug: "twinsync_spot"
-url: "https://github.com/kozzzzzzy/twin-sync-addon"
-build_from:
-  aarch64: ghcr.io/home-assistant/aarch64-base-python:3.11-alpine3.18
-  amd64: ghcr.io/home-assistant/amd64-base-python:3.11-alpine3.18
-  armhf: ghcr.io/home-assistant/armhf-base-python:3.11-alpine3.18
-  armv7: ghcr.io/home-assistant/armv7-base-python:3.11-alpine3.18
-  i386: ghcr.io/home-assistant/i386-base-python:3.11-alpine3.18
+url: "https://github.com/kozzzzzzy/twin-sync-addon-final"
 arch:
   - aarch64
   - amd64
@@ -16,10 +10,14 @@ arch:
   - armv7
   - i386
 homeassistant_api: true
+hassio_api: true
 ingress: true
 ingress_port: 8099
 panel_icon: "mdi:map-marker-check"
 panel_title: "TwinSync Spot"
+startup: application
+boot: auto
+init: false
 options:
   gemini_api_key: ""
 schema:
